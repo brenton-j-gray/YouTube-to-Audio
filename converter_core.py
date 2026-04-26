@@ -3,7 +3,7 @@ from typing import Any, Callable, cast
 
 import yt_dlp  # type: ignore[reportMissingTypeStubs]
 
-from app_utils import expected_wav_path, normalize_youtube_url, ytdlp_nocheck_certificate
+from app_utils import configure_ffmpeg_environment, expected_wav_path, normalize_youtube_url, ytdlp_nocheck_certificate
 
 
 class Converter:
@@ -63,6 +63,7 @@ class Converter:
         return postprocessor
 
     def _build_ydl_options(self) -> dict[str, Any]:
+        bundled_ffmpeg_dir = configure_ffmpeg_environment()
         opts = {
             "format": "bestaudio/best",
             "noplaylist": True,
@@ -80,6 +81,8 @@ class Converter:
             "nocheckcertificate": ytdlp_nocheck_certificate(),
             "overwrites": False,
         }
+        if bundled_ffmpeg_dir:
+            opts["ffmpeg_location"] = str(bundled_ffmpeg_dir)
         if self.codec in self.LOSSLESS_FORMATS:
             opts.pop("audio_quality", None)
         return opts

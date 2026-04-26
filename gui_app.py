@@ -1,3 +1,4 @@
+import ctypes
 import os
 import platform
 import re
@@ -60,8 +61,33 @@ class DragState(TypedDict):
     active: bool
 
 
+def _hex_to_rgb(color: str) -> tuple[int, int, int]:
+    c = color.lstrip("#")
+    if len(c) != 6:
+        return (0, 0, 0)
+    return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    r, g, b = rgb
+    return f"#{max(0, min(255, r)):02x}{max(0, min(255, g)):02x}{max(0, min(255, b)):02x}"
+
+
+def _blend_hex(c1: str, c2: str, t: float) -> str:
+    a = _hex_to_rgb(c1)
+    b = _hex_to_rgb(c2)
+    return _rgb_to_hex(
+        (
+            int(a[0] + (b[0] - a[0]) * t),
+            int(a[1] + (b[1] - a[1]) * t),
+            int(a[2] + (b[2] - a[2]) * t),
+        )
+    )
+
+
 def launch_gui() -> None:
     import tkinter as tk
+    from tkinter import font as tkfont
     from tkinter import filedialog, messagebox, ttk
     show_info = cast(Any, messagebox.showinfo)
     show_warning = cast(Any, messagebox.showwarning)
@@ -87,8 +113,8 @@ def launch_gui() -> None:
         return {
             "APP_IS_DARK": False,
             "ACCENT": accent,
-            "BG": "#f6f7f8",
-            "SURF": "#f5f5f5",
+            "BG": "#e9edf1",
+            "SURF": "#f2f3f5",
             "FG": "#555555",
             "MUTED": "#3f3f3f",
             "BORDER": "#a9adb3",
@@ -146,7 +172,29 @@ def launch_gui() -> None:
     root.configure(bg=BG)
     root.overrideredirect(True)
 
+    def register_preferred_title_font() -> None:
+        preferred = Path(__file__).resolve().parent / "Frijole-Regular.ttf"
+        if not preferred.is_file() or not sys.platform.startswith("win"):
+            return
+        try:
+            fr_private = 0x10
+            ctypes.windll.gdi32.AddFontResourceExW(str(preferred), fr_private, 0)
+            hwnd_broadcast = 0xFFFF
+            wm_fontchange = 0x001D
+            ctypes.windll.user32.SendMessageW(hwnd_broadcast, wm_fontchange, 0, 0)
+        except Exception:
+            pass
+
+    register_preferred_title_font()
+    families = {f.lower() for f in tkfont.families(root)}
+    if "frijole" in families:
+        TITLE_FONT = ("Frijole", 30, "normal")
+    else:
+        TITLE_FONT = (FONT_FAMILY, 24, "bold")
+
     saved = user_settings.load()
+    force_topmost_var = tk.BooleanVar(master=root, value=bool(saved.get("force_remain_on_top", False)))
+    root.attributes("-topmost", force_topmost_var.get())
     last_download_path = [saved.get("last_download_path")]
     if last_download_path[0] and not Path(last_download_path[0]).is_file():
         last_download_path[0] = None
@@ -506,7 +554,7 @@ def launch_gui() -> None:
         app_dir = str(Path(__file__).resolve().parent)
         show_info(
             "About",
-            f"YouTube → Audio File\n\n"
+            f"YouTube 2 Audio\n\n"
             f"Creator: Brenton Gray\n\n"
             f"Python {platform.python_version()}\n"
             f"yt-dlp {yv}\n\n"
@@ -520,9 +568,13 @@ def launch_gui() -> None:
     def show_shortcuts() -> None:
         show_info(
             "Shortcuts",
+            "Global:\n"
             "Ctrl+O — Choose output folder\n"
             "Ctrl+Shift+O — Open error log\n"
-            "Ctrl+Shift+F — Reveal last downloaded file in Explorer (when set)",
+            "Ctrl+Shift+F — Reveal last downloaded file\n\n"
+            "Conversion confirm modal:\n"
+            "Enter — Start conversion\n"
+            "Esc — Cancel",
         )
 
     help_menu = tk.Menu(root, **_menu_kws())
@@ -535,6 +587,8 @@ def launch_gui() -> None:
     help_menu.add_command(label="About", command=about_dialog)
     help_menu.add_command(label="Donate", command=open_donate)
     help_menu.add_command(label="View error log", command=open_error_log_externally)
+    help_menu.add_command(label="Network & certificate help…", command=show_network_help)
+    help_menu.add_command(label="Check yt-dlp version…", command=check_ytdlp_version)
     help_menu.add_command(label="Open GitHub", command=open_repo)
     help_menu.add_command(label="Keyboard shortcuts…", command=show_shortcuts)
 
@@ -635,6 +689,27 @@ def launch_gui() -> None:
     )
     min_btn.pack(side="right")
 
+    top_right_options = tk.Frame(root, bg=BG)
+    top_right_options.pack(fill="x", padx=8, pady=(2, 0))
+    top_right_options_inner = tk.Frame(top_right_options, bg=BG)
+    top_right_options_inner.pack(side="right")
+    topmost_check = tk.Checkbutton(
+        top_right_options_inner,
+        text="Always on top",
+        variable=force_topmost_var,
+        command=lambda: root.attributes("-topmost", force_topmost_var.get()),
+        bg=BG,
+        fg=FG,
+        selectcolor=SURF,
+        activebackground=BG,
+        activeforeground=FG,
+        font=(FONT_FAMILY, 9),
+        bd=0,
+        highlightthickness=0,
+        cursor="hand2",
+    )
+    topmost_check.pack(side="right")
+
     logo_row = tk.Frame(root, bg=BG)
     logo_row.pack(fill="x", padx=24, pady=(8, 2))
     youtube_logo_btn = tk.Canvas(logo_row, width=116, height=24, bg=BG, highlightthickness=0, bd=0, relief="flat", cursor="hand2")
@@ -644,14 +719,27 @@ def launch_gui() -> None:
     yt_logo_text_id = youtube_logo_btn.create_text(44, 12, text="YouTube", fill=FG, font=("Segoe UI", 11, "bold"), anchor="w")
     youtube_logo_btn.bind("<Button-1>", lambda _e: open_youtube_home())
 
-    lbl(root, "YouTube  →  Audio File", font=TITLE_FONT, fg=FG).pack(pady=(20, 2))
-    lbl(root, "Download any YouTube video as an audio file.", font=SUBTITLE_FONT, fg=MUTED).pack(pady=(0, 16))
+    title_label = lbl(root, "YouTube 2 Audio", font=TITLE_FONT, fg=FG)
+    if TITLE_FONT[0] == "Frijole":
+        try:
+            frijole_font = tkfont.Font(root=root, family="Frijole", size=30, weight="normal")
+            title_label.configure(font=frijole_font)
+            setattr(title_label, "_title_font_ref", frijole_font)
+        except tk.TclError:
+            pass
+    title_label.pack(pady=(20, 2))
+    lbl(root, "Download any YouTube video as an audio file in seconds.", font=SUBTITLE_FONT, fg=MUTED).pack(pady=(0, 16))
 
     preview_var = tk.StringVar(value="Preview: paste a YouTube URL below to auto-load video details.")
     preview_after_id: list[str | None] = [None]
     preview_pending_url: list[str | None] = [None]
     preview_request_id = [0]
+    preview_title_text = ["Unknown title"]
+    preview_channel_text = ["Unknown channel"]
     is_downloading = [False]
+    busy_anim_job: list[str | None] = [None]
+    busy_anim_offset = [0]
+    progress_display = [0.0]
 
     preview_title = lbl(root, "Video preview", font=SECTION_LABEL_FONT, fg=MUTED)
     preview_row = tk.Frame(root, bg=SURF, highlightthickness=BORDER_STYLE["control_thickness"], highlightbackground=BORDER)
@@ -900,8 +988,53 @@ def launch_gui() -> None:
         background=ACCENT,
         thickness=PROGRESS_THICKNESS,
     )
-    bar = ttk.Progressbar(root, style="Red.Horizontal.TProgressbar", orient="horizontal", length=500, mode="determinate")
-    bar.pack(padx=24, pady=(4, 16), ipady=PROGRESS_PAD_Y)
+    progress_host = tk.Frame(root, bg=BG, width=500, height=PROGRESS_THICKNESS + (PROGRESS_PAD_Y * 2))
+    progress_host.pack(padx=24, pady=(4, 16))
+    progress_host.pack_propagate(False)
+    bar = ttk.Progressbar(progress_host, style="Red.Horizontal.TProgressbar", orient="horizontal", mode="determinate")
+    bar.place(relx=0, rely=0, relwidth=1, relheight=1)
+    busy_bar_canvas = tk.Canvas(progress_host, highlightthickness=0, bd=0, relief="flat")
+    busy_bar_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
+    stripe_overlay_canvas = tk.Canvas(progress_host, highlightthickness=0, bd=0, relief="flat")
+    stripe_overlay_canvas.place_forget()
+
+    busy_palette = {
+        "trough": BORDER if not app_is_dark else SURF,
+        "stripe_a": ACCENT,
+        "stripe_b": _blend_hex(ACCENT, "#ffffff", 0.22),
+        "done_a": "#2f8f4e",
+        "done_b": "#48b86c",
+    }
+
+    def draw_busy_bar() -> None:
+        w = max(1, progress_host.winfo_width())
+        h = max(1, progress_host.winfo_height())
+        fill_w = int(max(0.0, min(100.0, progress_display[0])) / 100.0 * w)
+        is_complete = progress_display[0] >= 100.0 and not is_downloading[0]
+        busy_bar_canvas.configure(bg=busy_palette["trough"])
+        busy_bar_canvas.delete("all")
+        busy_bar_canvas.create_rectangle(0, 0, w, h, fill=busy_palette["trough"], outline=busy_palette["trough"])
+        if fill_w <= 0:
+            stripe_overlay_canvas.place_forget()
+            return
+        fill_a = busy_palette["done_a"] if is_complete else busy_palette["stripe_a"]
+        fill_b = busy_palette["done_b"] if is_complete else busy_palette["stripe_b"]
+        busy_bar_canvas.create_rectangle(0, 0, fill_w, h, fill=fill_a, outline=fill_a)
+        stripe_overlay_canvas.place(x=0, y=0, width=fill_w, height=h)
+        stripe_overlay_canvas.configure(bg=fill_a)
+        stripe_overlay_canvas.delete("all")
+        stripe_spacing = 16
+        stripe_width = 7
+        offset = busy_anim_offset[0]
+        for x in range(-h + offset, fill_w + h, stripe_spacing):
+            stripe_overlay_canvas.create_line(
+                x,
+                h,
+                x + h,
+                0,
+                fill=fill_b,
+                width=stripe_width,
+            )
 
     br = tk.Frame(root, bg=BG)
     br.pack(pady=(0, 24))
@@ -910,6 +1043,8 @@ def launch_gui() -> None:
     go_btn.pack(side="left", padx=(0, 10))
     stop_btn.pack(side="left")
     stop_btn.config(state="disabled")
+    # Ensure the primary action label matches the saved/restored format on startup.
+    update_quality_state()
 
     footer_row = tk.Frame(root, bg=BG)
     footer_row.pack(fill="x", padx=24, pady=(0, 8))
@@ -1001,23 +1136,51 @@ def launch_gui() -> None:
         is_downloading[0] = b
         go_btn.config(state="disabled" if b else "normal")
         stop_btn.config(state="normal" if b else "disabled")
+        if not b:
+            stripe_overlay_canvas.place_forget()
+            if busy_anim_job[0] is not None:
+                try:
+                    root.after_cancel(busy_anim_job[0])
+                except Exception:
+                    pass
+                busy_anim_job[0] = None
+            busy_anim_offset[0] = 0
+            draw_busy_bar()
 
     def on_progress(p: float) -> None:
-        root.after(0, lambda: bar.configure(value=p))
+        def _apply() -> None:
+            progress_display[0] = float(p)
+            bar.configure(value=p)
+            draw_busy_bar()
+
+        root.after(0, _apply)
 
     def on_status(s: str) -> None:
         root.after(0, lambda: status_var.set(s))
 
-    def on_preview_result(text: str, request_id: int, thumb_bytes: bytes | None = None) -> None:
+    def on_preview_result(
+        text: str,
+        request_id: int,
+        thumb_bytes: bytes | None = None,
+        title: str | None = None,
+        channel: str | None = None,
+    ) -> None:
         def apply_preview() -> None:
             if request_id == preview_request_id[0]:
                 preview_var.set(text)
+                preview_title_text[0] = title or "Unknown title"
+                preview_channel_text[0] = channel or "Unknown channel"
                 if thumb_bytes:
                     try:
                         photo = render_thumbnail(thumb_bytes)
                         preview_thumb_ref[0] = photo
                         if photo:
                             thumb_label.configure(image=photo, text="")
+                            # Quick pulse to make new thumbnail arrivals feel responsive.
+                            for step in range(7):
+                                color = _blend_hex(SURF, ACCENT, max(0.0, 0.32 - step * 0.05))
+                                root.after(step * 34, lambda c=color: thumb_frame.configure(highlightbackground=c))
+                            root.after(7 * 34, lambda: thumb_frame.configure(highlightbackground=BORDER))
                         else:
                             thumb_label.configure(image="", text="No preview")
                     except Exception as thumb_exc:
@@ -1053,10 +1216,22 @@ def launch_gui() -> None:
         def run_preview() -> None:
             try:
                 preview = preview_service.fetch(url)
-                on_preview_result(preview.text, request_id, thumb_bytes=preview.thumb_bytes)
+                on_preview_result(
+                    preview.text,
+                    request_id,
+                    thumb_bytes=preview.thumb_bytes,
+                    title=preview.title,
+                    channel=preview.channel,
+                )
             except Exception as e:
                 append_error_log("preview_exception", f"URL: {url}\n{e}\n{traceback.format_exc()}")
-                on_preview_result("Preview failed. See error log for details.", request_id, thumb_bytes=None)
+                on_preview_result(
+                    "Preview failed. See error log for details.",
+                    request_id,
+                    thumb_bytes=None,
+                    title=None,
+                    channel=None,
+                )
 
         threading.Thread(target=run_preview, daemon=True).start()
 
@@ -1101,15 +1276,16 @@ def launch_gui() -> None:
 
     def on_done(ok: bool, result: str) -> None:
         def _() -> None:
-            set_busy(False)
             if ok:
+                progress_display[0] = 100.0
                 bar.configure(value=100)
+                set_busy(False)
                 rpath = Path(result).resolve()
                 last_download_path[0] = str(rpath)
                 recent_folders_state[0] = user_settings.bump_recent(recent_folders_state[0], str(rpath.parent))
                 do_persist()
-                status_var.set(f"✓  Saved: {rpath.name}")
-                show_info("Done!", f"Audio file saved to:\n{result}")
+                status_var.set(f"✓  Saved: {rpath}")
+                show_completion_toast(f"Saved: {rpath.name}")
                 if play_after_var.get() and rpath.is_file():
                     try:
                         if os.name == "nt":
@@ -1123,14 +1299,300 @@ def launch_gui() -> None:
                 if auto_open_var.get():
                     open_folder(rpath.parent)
             elif result == "Cancelled by user.":
+                set_busy(False)
+                progress_display[0] = 0.0
                 bar.configure(value=0)
                 status_var.set("Cancelled.")
+                draw_busy_bar()
             else:
+                set_busy(False)
+                progress_display[0] = 0.0
                 bar.configure(value=0)
                 status_var.set("Download failed.")
                 show_error("Download failed", result)
+                draw_busy_bar()
 
         root.after(0, _)
+
+    def show_completion_toast(message: str) -> None:
+        toast = tk.Toplevel(root)
+        toast.overrideredirect(True)
+        toast.configure(bg=ACCENT)
+        toast.attributes("-topmost", True)
+        try:
+            toast.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
+        tx = tk.Label(
+            toast,
+            text=f"✓ {message}",
+            bg=ACCENT,
+            fg=ON_ACCENT,
+            font=(FONT_FAMILY, 10, "bold"),
+            padx=12,
+            pady=8,
+        )
+        tx.pack()
+        root.update_idletasks()
+        x = root.winfo_rootx() + root.winfo_width() - 260
+        y_final = root.winfo_rooty() + root.winfo_height() - 70
+        y_start = y_final + 18
+        toast.geometry(f"+{x}+{y_start}")
+
+        def animate_in(step: int = 0) -> None:
+            if step > 8:
+                root.after(1300, animate_out)
+                return
+            frac = step / 8.0
+            y = int(y_start - (y_start - y_final) * frac)
+            toast.geometry(f"+{x}+{y}")
+            try:
+                toast.attributes("-alpha", min(0.95, frac))
+            except tk.TclError:
+                pass
+            root.after(22, lambda: animate_in(step + 1))
+
+        def animate_out(step: int = 0) -> None:
+            if step > 8:
+                toast.destroy()
+                return
+            frac = step / 8.0
+            try:
+                toast.attributes("-alpha", max(0.0, 0.95 * (1.0 - frac)))
+            except tk.TclError:
+                pass
+            root.after(28, lambda: animate_out(step + 1))
+
+        animate_in()
+
+    def confirm_conversion_settings(
+        video_title: str,
+        channel_name: str,
+        output_dir: str,
+        format_label: str,
+        quality_label: str,
+    ) -> bool:
+        modal = tk.Toplevel(root)
+        modal.resizable(False, False)
+        modal.configure(bg=BG)
+        modal.transient(root)
+        modal.overrideredirect(True)
+        modal.attributes("-topmost", True)
+        modal_w = 560
+        modal_h = 380
+        modal.geometry(f"{modal_w}x{modal_h}")
+        modal.withdraw()
+
+        decision = {"ok": False}
+
+        def short_text(value: str, max_len: int = 72) -> str:
+            s = value.strip()
+            return s if len(s) <= max_len else f"{s[: max_len - 3]}..."
+
+        top_border = tk.Frame(modal, bg=ACCENT, height=2)
+        top_border.pack(fill="x", side="top")
+        left_border = tk.Frame(modal, bg=ACCENT, width=2)
+        left_border.pack(fill="y", side="left")
+        right_border = tk.Frame(modal, bg=ACCENT, width=2)
+        right_border.pack(fill="y", side="right")
+        bottom_border = tk.Frame(modal, bg=ACCENT, height=2)
+        bottom_border.pack(fill="x", side="bottom")
+
+        header = tk.Frame(modal, bg=BG)
+        header.pack(fill="x", padx=16, pady=(12, 6))
+        tk.Label(
+            header,
+            text="Confirm conversion",
+            bg=BG,
+            fg=FG,
+            font=(FONT_FAMILY, 13, "bold"),
+            anchor="w",
+        ).pack(fill="x")
+        tk.Label(
+            header,
+            text="Review settings before starting",
+            bg=BG,
+            fg=MUTED,
+            font=(FONT_FAMILY, 9),
+            anchor="w",
+        ).pack(fill="x", pady=(2, 0))
+
+        settings_card = tk.Frame(
+            modal,
+            bg=SURF,
+            highlightthickness=BORDER_STYLE["control_thickness"],
+            highlightbackground=BORDER,
+        )
+        settings_card.pack(fill="both", expand=False, padx=16, pady=(2, 8))
+
+        tk.Label(
+            settings_card,
+            text="Title",
+            bg=SURF,
+            fg=MUTED,
+            font=(FONT_FAMILY, 9, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(10, 0))
+        tk.Label(
+            settings_card,
+            text=short_text(video_title, 78),
+            bg=SURF,
+            fg=FG,
+            font=(FONT_FAMILY, 10),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", padx=12, pady=(1, 8))
+
+        tk.Label(
+            settings_card,
+            text="Channel",
+            bg=SURF,
+            fg=MUTED,
+            font=(FONT_FAMILY, 9, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 0))
+        tk.Label(
+            settings_card,
+            text=short_text(channel_name, 78),
+            bg=SURF,
+            fg=FG,
+            font=(FONT_FAMILY, 10),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", padx=12, pady=(1, 8))
+
+        tk.Label(
+            settings_card,
+            text="Output folder",
+            bg=SURF,
+            fg=MUTED,
+            font=(FONT_FAMILY, 9, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(0, 0))
+        tk.Label(
+            settings_card,
+            text=short_text(output_dir, 78),
+            bg=SURF,
+            fg=FG,
+            font=(FONT_FAMILY, 10),
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", padx=12, pady=(1, 8))
+
+        row = tk.Frame(settings_card, bg=SURF)
+        row.pack(fill="x", padx=12, pady=(0, 10))
+        tk.Label(
+            row,
+            text=f"Format: {short_text(format_label, 26)}",
+            bg=SURF,
+            fg=FG,
+            font=(FONT_FAMILY, 10, "bold"),
+            anchor="w",
+        ).pack(side="left")
+        tk.Label(
+            row,
+            text=f"Quality: {short_text(quality_label, 24)}",
+            bg=SURF,
+            fg=MUTED,
+            font=(FONT_FAMILY, 10),
+            anchor="w",
+        ).pack(side="right")
+
+        tk.Label(
+            modal,
+            text="Proceed with these settings?",
+            bg=BG,
+            fg=MUTED,
+            font=(FONT_FAMILY, 9),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(0, 8))
+
+        btn_row = tk.Frame(modal, bg=BG)
+        btn_row.pack(fill="x", side="bottom", padx=16, pady=(0, 12))
+
+        def on_cancel() -> None:
+            decision["ok"] = False
+            modal.destroy()
+
+        def on_confirm() -> None:
+            decision["ok"] = True
+            modal.destroy()
+
+        tk.Button(
+            btn_row,
+            text="Cancel",
+            command=on_cancel,
+            bg=NEUTRAL_BTN_BG,
+            fg=NEUTRAL_BTN_FG,
+            activebackground=NEUTRAL_BTN_ACTIVE,
+            activeforeground=NEUTRAL_BTN_FG,
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            highlightthickness=BORDER_STYLE["control_thickness"],
+            highlightbackground=BORDER,
+            highlightcolor=BORDER,
+        ).pack(side="right", padx=(8, 0))
+        confirm_btn = tk.Button(
+            btn_row,
+            text="Start conversion",
+            command=on_confirm,
+            bg=ACCENT,
+            fg=ON_ACCENT,
+            activebackground=ACCENT,
+            activeforeground=ON_ACCENT,
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=6,
+            cursor="hand2",
+            highlightthickness=BORDER_STYLE["control_thickness"],
+            highlightbackground=BORDER,
+            highlightcolor=BORDER,
+        )
+        confirm_btn.pack(side="right")
+
+        modal.protocol("WM_DELETE_WINDOW", on_cancel)
+
+        def center_modal() -> None:
+            root.update_idletasks()
+            modal.update_idletasks()
+            rx = int(root.winfo_rootx())
+            ry = int(root.winfo_rooty())
+            rw = int(root.winfo_width())
+            rh = int(root.winfo_height())
+            if (rx == 0 and ry == 0) or rw <= 1 or rh <= 1:
+                # Fallback for borderless windows that sometimes report stale root coords on first paint.
+                m = re.match(r"^\d+x\d+([+-]\d+)([+-]\d+)$", str(root.winfo_geometry()))
+                if m:
+                    rx = int(m.group(1))
+                    ry = int(m.group(2))
+            x = rx + max(0, (rw - modal_w) // 2)
+            y = ry + max(0, (rh - modal_h) // 2)
+            modal.geometry(f"{modal_w}x{modal_h}+{x}+{y}")
+
+        center_modal()
+        modal.deiconify()
+        modal.lift()
+        modal.grab_set()
+        modal.focus_force()
+        confirm_btn.focus_set()
+        # One extra pass after map for Windows placement quirks.
+        modal.after(10, lambda: (center_modal(), modal.lift()))
+        modal.bind("<Escape>", lambda _e: on_cancel())
+        modal.bind("<Return>", lambda _e: on_confirm())
+        root.wait_window(modal)
+        return bool(decision["ok"])
+
+    def run_busy_progress_animation() -> None:
+        if not is_downloading[0]:
+            busy_anim_job[0] = None
+            return
+        busy_anim_offset[0] = (busy_anim_offset[0] + 4) % 16
+        draw_busy_bar()
+        busy_anim_job[0] = root.after(36, run_busy_progress_animation)
 
     def start() -> None:
         url = url_var.get().strip()
@@ -1159,15 +1621,30 @@ def launch_gui() -> None:
             return
         if out != normalized_out:
             dir_var.set(normalized_out)
+        if not confirm_conversion_settings(
+            preview_title_text[0],
+            preview_channel_text[0],
+            normalized_out,
+            fmt_var.get(),
+            q_var.get(),
+        ):
+            status_var.set("Conversion cancelled before start.")
+            return
         set_busy(True)
+        progress_display[0] = 0.0
         bar.configure(value=0)
         status_var.set("Starting…")
+        if busy_anim_job[0] is None:
+            run_busy_progress_animation()
         _cv[0] = Converter(url, normalized_out, q_var.get(), fmt_var.get(), on_progress, on_status, on_done)
         threading.Thread(target=_cv[0].run, daemon=True).start()
 
     def cancel() -> None:
         if _cv[0]:
             _cv[0].cancel()
+        progress_display[0] = 0.0
+        bar.configure(value=0)
+        draw_busy_bar()
         status_var.set("Cancelled.")
         set_busy(False)
 
@@ -1218,6 +1695,7 @@ def launch_gui() -> None:
             quality_key=q_var.get(),
             auto_open_folder=auto_open_var.get(),
             play_after_download=play_after_var.get(),
+            force_remain_on_top=force_topmost_var.get(),
             auto_preview=auto_preview_var.get(),
             preview_debounce_ms=deb,
             last_download_path=lp,
@@ -1239,10 +1717,14 @@ def launch_gui() -> None:
                 pass
             preview_after_id[0] = None
         url_var.set("")
+        progress_display[0] = 0.0
         bar.configure(value=0)
+        draw_busy_bar()
         preview_var.set("Preview: paste a YouTube URL below to auto-load video details.")
         preview_thumb_ref[0] = None
         preview_pending_url[0] = None
+        preview_title_text[0] = "Unknown title"
+        preview_channel_text[0] = "Unknown channel"
         thumb_label.configure(image="", text="No preview")
         status_var.set("Ready.")
 
@@ -1267,6 +1749,12 @@ def launch_gui() -> None:
             command=do_persist,
             selectcolor=ACCENT,
         )
+        settings_menu.add_checkbutton(
+            label="Force remain on top",
+            variable=force_topmost_var,
+            command=lambda: root.attributes("-topmost", force_topmost_var.get()),
+            selectcolor=ACCENT,
+        )
         settings_menu.add_separator()
         preview_opts_menu = tk.Menu(settings_menu, **_menu_kws())
         all_menu_popups.append(preview_opts_menu)
@@ -1287,8 +1775,6 @@ def launch_gui() -> None:
             )
         settings_menu.add_cascade(label="Preview", menu=preview_opts_menu)
         settings_menu.add_separator()
-        settings_menu.add_command(label="Network & certificate help…", command=show_network_help)
-        settings_menu.add_command(label="Check yt-dlp version…", command=check_ytdlp_version)
 
     append_settings_extras()
 
@@ -1304,9 +1790,23 @@ def launch_gui() -> None:
             current_fg = str(w.cget("fg"))
             target_fg = p["MUTED"] if current_fg in {MUTED, p["MUTED"]} else p["FG"]
             w.configure(bg=p["BG"], fg=target_fg)
+        title_label.configure(font=TITLE_FONT, fg=p["FG"])
 
-        for frame in (top_controls, logo_row, dr, selection_row, format_col, quality_col, br, footer_row, donate_box):
+        for frame in (
+            top_controls,
+            top_right_options,
+            top_right_options_inner,
+            logo_row,
+            dr,
+            selection_row,
+            format_col,
+            quality_col,
+            br,
+            footer_row,
+            donate_box,
+        ):
             frame.configure(bg=p["BG"])
+        progress_host.configure(bg=p["BG"])
         for frame in (uf, url_row, dir_input_wrap, preview_row, thumb_frame, preview_text_frame):
             frame.configure(bg=p["SURF"], highlightbackground=p["BORDER"])
         thumb_label.configure(bg=p["SURF"], fg=p["MUTED"])
@@ -1359,6 +1859,13 @@ def launch_gui() -> None:
                 activebackground=p["BG"],
                 activeforeground=p["FG"],
             )
+        topmost_check.configure(
+            bg=p["BG"],
+            fg=p["FG"],
+            selectcolor=p["SURF"],
+            activebackground=p["BG"],
+            activeforeground=p["FG"],
+        )
         for title_btn in (min_btn, close_btn):
             title_btn.configure(
                 bg=p["NEUTRAL_BTN_BG"],
@@ -1417,6 +1924,10 @@ def launch_gui() -> None:
             background=p["ACCENT"],
             thickness=PROGRESS_THICKNESS,
         )
+        busy_palette["trough"] = p["BORDER"] if not p["APP_IS_DARK"] else p["SURF"]
+        busy_palette["stripe_a"] = p["ACCENT"]
+        busy_palette["stripe_b"] = _blend_hex(p["ACCENT"], "#ffffff", 0.22)
+        draw_busy_bar()
 
     last_system_dark = [is_windows_dark_mode()]
 
@@ -1440,6 +1951,7 @@ def launch_gui() -> None:
     cast(Any, q_var).trace_add("write", _persist_trace)
     cast(Any, auto_preview_var).trace_add("write", _persist_trace)
     cast(Any, play_after_var).trace_add("write", _persist_trace)
+    cast(Any, force_topmost_var).trace_add("write", _persist_trace)
     cast(Any, preview_debounce_intvar).trace_add("write", _persist_trace)
 
     def _dir_persist(_a: Any = None, _b: Any = None, _c: Any = None) -> None:

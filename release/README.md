@@ -18,12 +18,11 @@ Supported output formats:
 - Configurable output format/quality
 - Persistent user settings (theme, recent folders, preview behavior, etc.)
 - Cancelable downloads/conversions
-- Optional self-contained FFmpeg runtime inside packaged releases
 
 ## Requirements
 
 - Python 3.10+
-- `ffmpeg` and `ffprobe` available on your system `PATH` (unless using a bundled release)
+- `ffmpeg` and `ffprobe` available on your system `PATH`
 - Python packages in `requirements.txt`
 
 Install Python dependencies:
@@ -86,14 +85,9 @@ Artifacts:
 - `release/YouTubeToAudio-windows-x64.zip` (ready to share)
 
 Optional self-contained FFmpeg packaging:
-- Put binaries in a local `ffmpeg/` folder at the project root:
-  - `ffmpeg/ffmpeg.exe`
-  - `ffmpeg/ffprobe.exe`
+- Put `ffmpeg.exe` and `ffprobe.exe` in a local `ffmpeg/` folder at the project root.
 - Run `./build_release.ps1` as usual; the script auto-bundles that folder.
-- At runtime, the app auto-detects bundled binaries and uses them (no system PATH requirement).
-
-Quick source for FFmpeg binaries (Windows):
-- [Gyan FFmpeg builds](https://www.gyan.dev/ffmpeg/builds/)
+- At runtime, the app auto-detects bundled ffmpeg binaries and uses them (no system PATH requirement).
 
 ## Disclaimer
 

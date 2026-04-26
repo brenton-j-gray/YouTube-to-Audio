@@ -54,6 +54,7 @@ def _defaults() -> dict[str, Any]:
         "quality": "Medium (192 kbps)",
         "auto_open_folder": True,
         "play_after_download": False,
+        "force_remain_on_top": False,
         "auto_preview": True,
         "preview_debounce_ms": 650,
         "last_download_path": None,
@@ -94,6 +95,7 @@ def _normalize(loaded: dict[str, Any]) -> dict[str, Any]:
     d["recent_folders"] = out_rf[:MAX_RECENT_FOLDERS]
     d["auto_open_folder"] = bool(loaded.get("auto_open_folder", True))
     d["play_after_download"] = bool(loaded.get("play_after_download", False))
+    d["force_remain_on_top"] = bool(loaded.get("force_remain_on_top", False))
     d["auto_preview"] = bool(loaded.get("auto_preview", True))
     d["preview_debounce_ms"] = _valid_debounce(
         int(loaded.get("preview_debounce_ms", 650) or 650)
@@ -135,6 +137,7 @@ def save(
     quality_key: str,
     auto_open_folder: bool,
     play_after_download: bool,
+    force_remain_on_top: bool,
     auto_preview: bool,
     preview_debounce_ms: int,
     last_download_path: Optional[str],
@@ -149,6 +152,7 @@ def save(
         "quality": quality_key if _valid_quality(quality_key) else _defaults()["quality"],
         "auto_open_folder": auto_open_folder,
         "play_after_download": play_after_download,
+        "force_remain_on_top": force_remain_on_top,
         "auto_preview": auto_preview,
         "preview_debounce_ms": _valid_debounce(preview_debounce_ms),
         "last_download_path": last_download_path,

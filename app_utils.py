@@ -1,8 +1,10 @@
 import ctypes
 import hashlib
 import os
+import shutil
 import ssl
 import subprocess
+import sys
 import tempfile
 import traceback
 import winreg
@@ -29,6 +31,80 @@ def _try_install_certifi_ssl() -> bool:
 
 # Set as early as possible (before any HTTPS). If False, yt-dlp uses nocheck by default; see ytdlp_nocheck_certificate.
 _SSL_USES_CERTIFI = _try_install_certifi_ssl()
+
+
+def _ffmpeg_binary_name(base: str) -> str:
+    return f"{base}.exe" if os.name == "nt" else base
+
+
+def _ffmpeg_search_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    script_dir = Path(__file__).resolve().parent
+    dirs.append(script_dir)
+    dirs.append(script_dir / "ffmpeg")
+    dirs.append(script_dir / "ffmpeg" / "bin")
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        dirs.append(exe_dir)
+        dirs.append(exe_dir / "ffmpeg")
+        dirs.append(exe_dir / "ffmpeg" / "bin")
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        mp = Path(str(meipass))
+        dirs.append(mp)
+        dirs.append(mp / "ffmpeg")
+        dirs.append(mp / "ffmpeg" / "bin")
+    seen: set[str] = set()
+    unique_dirs: list[Path] = []
+    for d in dirs:
+        s = str(d)
+        if s not in seen:
+            seen.add(s)
+            unique_dirs.append(d)
+    return unique_dirs
+
+
+def bundled_ffmpeg_directory() -> Path | None:
+    ffmpeg_name = _ffmpeg_binary_name("ffmpeg")
+    ffprobe_name = _ffmpeg_binary_name("ffprobe")
+    for d in _ffmpeg_search_dirs():
+        if (d / ffmpeg_name).is_file() and (d / ffprobe_name).is_file():
+            return d
+    return None
+
+
+def configure_ffmpeg_environment() -> Path | None:
+    bundled_dir = bundled_ffmpeg_directory()
+    if not bundled_dir:
+        return None
+    current = os.environ.get("PATH", "")
+    parts = current.split(os.pathsep) if current else []
+    bundled_str = str(bundled_dir)
+    if bundled_str not in parts:
+        os.environ["PATH"] = bundled_str + (os.pathsep + current if current else "")
+    return bundled_dir
+
+
+def missing_ffmpeg_binaries() -> list[str]:
+    """Return required ffmpeg binaries that are missing from PATH."""
+    configure_ffmpeg_environment()
+    required = ("ffmpeg", "ffprobe")
+    return [name for name in required if shutil.which(name) is None]
+
+
+def ffmpeg_help_message(missing: list[str] | None = None) -> str:
+    missing = missing or missing_ffmpeg_binaries()
+    missing_display = ", ".join(missing) if missing else "none"
+    return (
+        "Missing required media tools.\n\n"
+        f"Not found on PATH: {missing_display}\n\n"
+        "This app requires both ffmpeg and ffprobe.\n"
+        "Install FFmpeg and make sure ffmpeg/ffprobe are available in your system PATH.\n\n"
+        "Quick Windows options:\n"
+        "  - winget install Gyan.FFmpeg\n"
+        "  - choco install ffmpeg\n\n"
+        "After installing, restart this app."
+    )
 
 
 def ytdlp_nocheck_certificate() -> bool:

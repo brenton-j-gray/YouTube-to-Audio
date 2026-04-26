@@ -16,6 +16,8 @@ from app_utils import (
 class PreviewResult:
     text: str
     thumb_bytes: Optional[bytes] = None
+    title: Optional[str] = None
+    channel: Optional[str] = None
 
 
 class VideoPreviewService:
@@ -60,4 +62,16 @@ class VideoPreviewService:
                     f"URL: {url}\nThumbnail: {thumb_url}\n{thumb_fetch_exc}",
                 )
 
-        return PreviewResult(text=build_preview_text(info_dict), thumb_bytes=thumb_bytes)
+        title_val = info_dict.get("title")
+        channel_val = info_dict.get("uploader")
+        if not isinstance(channel_val, str) or not channel_val:
+            channel_val = info_dict.get("channel")
+        title = title_val if isinstance(title_val, str) and title_val else None
+        channel = channel_val if isinstance(channel_val, str) and channel_val else None
+
+        return PreviewResult(
+            text=build_preview_text(info_dict),
+            thumb_bytes=thumb_bytes,
+            title=title,
+            channel=channel,
+        )
