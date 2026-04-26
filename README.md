@@ -1,6 +1,9 @@
 # YouTube to Audio (Python)
 
-Convert YouTube videos to audio files with a desktop GUI or CLI.
+<img width="421" height="449" alt="Screenshot 2026-04-26 142136" src="https://github.com/user-attachments/assets/a595c53d-f076-4d0a-85d6-a61bea55702a" />
+<img width="421" height="443" alt="Screenshot 2026-04-26 142157" src="https://github.com/user-attachments/assets/26a21ad2-a878-4c09-80a9-07b12e202f88" />
+
+### Convert YouTube videos to audio files with a desktop GUI or CLI.
 
 Supported output formats:
 - WAV
