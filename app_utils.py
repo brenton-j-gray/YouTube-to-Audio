@@ -311,7 +311,31 @@ def is_supported_youtube_url(url: str) -> bool:
 
 
 def open_folder(path: str | Path) -> None:
-    subprocess.Popen(["explorer", str(path)])
+    _open_external_path(Path(path))
+
+
+def _open_external_path(path: Path, *, reveal: bool = False) -> None:
+    try:
+        resolved = path.resolve()
+    except (OSError, TypeError, ValueError):
+        return
+
+    command: list[str] | None
+    if os.name == "nt":
+        command = ["explorer", "/select,", str(resolved)] if reveal else ["explorer", str(resolved)]
+    elif sys.platform == "darwin":
+        command = ["open", "-R", str(resolved)] if reveal else ["open", str(resolved)]
+    else:
+        opener = shutil.which("xdg-open")
+        target = resolved.parent if reveal and resolved.is_file() else resolved
+        command = [opener, str(target)] if opener else None
+
+    if not command:
+        return
+    try:
+        subprocess.Popen(command)
+    except OSError:
+        return
 
 
 def error_log_path_candidates() -> list[Path]:
@@ -322,30 +346,24 @@ def open_error_log_externally() -> None:
     """Open the first available error log in the system default viewer, or create the project log."""
     for p in error_log_path_candidates():
         if p.is_file():
-            try:
-                os.startfile(p)  # type: ignore[attr-defined]
-            except (OSError, AttributeError):
-                try:
-                    subprocess.Popen(["explorer", str(p)])
-                except OSError:
-                    pass
+            _open_external_path(p)
             return
     try:
         Path(PROJECT_ERROR_LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
         Path(PROJECT_ERROR_LOG_PATH).touch()
-        os.startfile(Path(PROJECT_ERROR_LOG_PATH))  # type: ignore[attr-defined]
-    except (OSError, AttributeError):
+        _open_external_path(Path(PROJECT_ERROR_LOG_PATH))
+    except OSError:
         pass
 
 
 def reveal_in_explorer(path: str | Path) -> None:
-    """Select a file in Windows Explorer, or open a directory."""
+    """Reveal a file in the platform file manager, or open a directory."""
     try:
         p = Path(path).resolve()
     except (OSError, TypeError, ValueError):
         return
     if p.is_file():
-        subprocess.Popen(["explorer", "/select,", str(p)])
+        _open_external_path(p, reveal=True)
     elif p.is_dir():
         open_folder(p)
 
