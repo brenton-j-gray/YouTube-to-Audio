@@ -7,12 +7,16 @@ import subprocess
 import sys
 import tempfile
 import traceback
-import winreg
 from pathlib import Path
 from types import TracebackType
 from typing import Any, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
+
+if os.name == "nt":
+    import winreg
+else:
+    winreg = None
 
 
 def _try_install_certifi_ssl() -> bool:
@@ -347,6 +351,8 @@ def reveal_in_explorer(path: str | Path) -> None:
 
 
 def is_windows_dark_mode() -> bool:
+    if winreg is None:
+        return False
     try:
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
