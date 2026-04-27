@@ -98,6 +98,25 @@ Optional self-contained FFmpeg packaging:
 Quick source for FFmpeg binaries (Windows):
 - [Gyan FFmpeg builds](https://www.gyan.dev/ffmpeg/builds/)
 
-## Disclaimer
+## Legal Disclaimer
 
-Use responsibly and comply with YouTube's Terms of Service and applicable copyright laws.
+This software is provided for lawful purposes only.
+
+You are solely responsible for how you use this software and for ensuring that your use complies with all applicable laws, regulations, and platform terms in your jurisdiction.
+
+This repository and its authors/contributors do not encourage, authorize, or endorse copyright infringement, unauthorized downloading, redistribution, or any other unlawful activity.
+
+To the maximum extent permitted by law, the authors and contributors disclaim all liability for any claims, damages, penalties, losses, or other consequences arising from misuse or unlawful use of this software.
+
+This project does not provide legal advice. Before using this software, review the laws and regulations that apply in your location and review YouTube's Terms of Service for full rules and restrictions.
+
+### Potentially Permitted Uses (examples only)
+- Downloading/converting content you own
+- Content in the public domain
+- Content provided under a license that permits downloading/conversion (for example, certain Creative Commons licenses)
+- Content where you have explicit permission from the rights holder
+
+### Prohibited Uses (examples)
+- Downloading or converting copyrighted content without permission
+- Redistributing, publishing, or monetizing content without the required rights
+- Any use that violates applicable laws, regulations, or YouTube's Terms of Service
