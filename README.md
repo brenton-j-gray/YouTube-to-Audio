@@ -1,7 +1,7 @@
 # YouTube 2 Audio
 Convert YouTube videos to audio files with a desktop GUI or CLI.
 
- _**--->  PLEASE READ LEGAL DISCLAIMER BELOW BEFORE USE  <---**_
+ [_**--->  PLEASE READ LEGAL DISCLAIMER BELOW BEFORE USE  <---**_](https://github.com/brenton-j-gray/YouTube-to-Audio/tree/main/README.md#legal-disclaimer)
 
 ## Screenshots
 <img width="421" height="449" alt="Screenshot 2026-04-26 142136" src="https://github.com/user-attachments/assets/a595c53d-f076-4d0a-85d6-a61bea55702a" />
