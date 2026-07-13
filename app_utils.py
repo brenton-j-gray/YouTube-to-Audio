@@ -1,6 +1,7 @@
 import ctypes
 import hashlib
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -89,6 +90,46 @@ def configure_ffmpeg_environment() -> Path | None:
     return bundled_dir
 
 
+def _tcl_extended_path(path: Path) -> str:
+    resolved = path.resolve()
+    if sys.platform != "win32":
+        return str(resolved)
+    text = resolved.as_posix()
+    if text.startswith("//"):
+        return text
+    return f"//?/{text}"
+
+
+def configure_tcl_tk_environment() -> None:
+    """
+    Point Tcl/Tk at the active Python install's script libraries.
+
+    Some Windows Tcl builds can mis-normalize paths under AppData unless the
+    extended path form is used. Tkinter imports still work, but Tk() fails while
+    loading init.tcl.
+    """
+    if sys.platform != "win32":
+        return
+
+    root_candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        root_candidates.append(Path(str(meipass)) / "tcl")
+    root_candidates.append(Path(sys.base_prefix) / "tcl")
+    libraries = {
+        "TCL_LIBRARY": ("tcl8.6", "init.tcl"),
+        "TK_LIBRARY": ("tk8.6", "tk.tcl"),
+    }
+    for env_name, (library_name, sentinel) in libraries.items():
+        if os.environ.get(env_name):
+            continue
+        for tcl_root in root_candidates:
+            library_dir = tcl_root / library_name
+            if (library_dir / sentinel).is_file():
+                os.environ[env_name] = _tcl_extended_path(library_dir)
+                break
+
+
 def missing_ffmpeg_binaries() -> list[str]:
     """Return required ffmpeg binaries that are missing from PATH."""
     configure_ffmpeg_environment()
@@ -122,6 +163,43 @@ def ytdlp_nocheck_certificate() -> bool:
     if v in ("0", "false", "no", "off"):
         return False
     return not _SSL_USES_CERTIFI
+
+
+_COOKIES_FROM_BROWSER_RE = re.compile(
+    r"(?x)"
+    r"(?P<name>[^+:]+)"
+    r"(?:\s*\+\s*(?P<keyring>[^:]+))?"
+    r"(?:\s*:\s*(?!:)(?P<profile>.+?))?"
+    r"(?:\s*::\s*(?P<container>.+))?"
+)
+
+
+def ytdlp_cookies_from_browser() -> tuple[str, str | None, str | None, str | None] | None:
+    """
+    Return yt-dlp's Python API value for cookiesfrombrowser.
+
+    yt-dlp expects an iterable browser specification, for example ("edge", None, None, None).
+    Passing True reaches yt_dlp.cookies._parse_browser_specification(*True)
+    and fails because bool is not iterable.
+    """
+    configured = os.environ.get("YT_TO_AUDIO_COOKIES_FROM_BROWSER", "").strip()
+    if not configured or configured.lower() in {"0", "false", "no", "off", "none", "disabled"}:
+        return None
+    browser_spec = configured
+    match = _COOKIES_FROM_BROWSER_RE.fullmatch(browser_spec)
+    if not match:
+        return None
+    browser, keyring, profile, container = match.group("name", "keyring", "profile", "container")  # type: ignore[union-attr]
+    return (browser.lower(), profile, keyring.upper() if keyring else None, container)
+
+
+def is_ytdlp_cookie_error(err: object) -> bool:
+    message = str(err).lower()
+    return (
+        "failed to load cookies" in message
+        or "failed to decrypt with dpapi" in message
+        or "cookies._parse_browser_specification" in message
+    )
 
 
 TEMP_ERROR_LOG_PATH = os.path.join(tempfile.gettempdir(), "yt_to_audio_error.log")
@@ -321,7 +399,7 @@ def _open_external_path(path: Path, *, reveal: bool = False) -> None:
         return
 
     command: list[str] | None
-    if os.name == "nt":
+    if sys.platform == "win32":
         command = ["explorer", "/select,", str(resolved)] if reveal else ["explorer", str(resolved)]
     elif sys.platform == "darwin":
         command = ["open", "-R", str(resolved)] if reveal else ["open", str(resolved)]

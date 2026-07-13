@@ -2,3 +2,9 @@
 __pycache__/
 *.py[cod]
 yt_to_audio_error.log
+build/
+dist/
+ffmpeg/
+release/
+*.log
+PROJECT_MEMORY.md

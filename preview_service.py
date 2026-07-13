@@ -7,7 +7,9 @@ from app_utils import (
     append_error_log,
     build_preview_text,
     fetch_url_bytes,
+    is_ytdlp_cookie_error,
     pick_thumbnail_url,
+    ytdlp_cookies_from_browser,
     ytdlp_nocheck_certificate,
 )
 
@@ -32,7 +34,7 @@ class VideoPreviewService:
         self._thumbnail_fetcher = thumbnail_fetcher
 
     def fetch(self, url: str) -> PreviewResult:
-        opts = {
+        opts: dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
@@ -40,8 +42,22 @@ class VideoPreviewService:
             "extract_flat": False,
             "nocheckcertificate": ytdlp_nocheck_certificate(),
         }
-        with cast(Any, self._ydl_factory(opts)) as ydl:
-            info_obj = cast(Any, ydl.extract_info(url, download=False))  # type: ignore[reportUnknownMemberType]
+        cookies_from_browser = ytdlp_cookies_from_browser()
+        if cookies_from_browser is not None:
+            opts["cookiesfrombrowser"] = cookies_from_browser
+        try:
+            with cast(Any, self._ydl_factory(opts)) as ydl:
+                info_obj = cast(Any, ydl.extract_info(url, download=False))  # type: ignore[reportUnknownMemberType]
+        except yt_dlp.utils.DownloadError as cookie_exc:
+            if not cookies_from_browser or not is_ytdlp_cookie_error(cookie_exc):
+                raise
+            append_error_log(
+                "preview_cookie_fallback",
+                f"URL: {url}\nBrowser cookies failed; retrying without cookies.\n{cookie_exc}",
+            )
+            opts.pop("cookiesfrombrowser", None)
+            with cast(Any, self._ydl_factory(opts)) as ydl:
+                info_obj = cast(Any, ydl.extract_info(url, download=False))  # type: ignore[reportUnknownMemberType]
         if not info_obj:
             raise ValueError("No metadata returned for this URL.")
         info_dict: dict[str, object] = {}

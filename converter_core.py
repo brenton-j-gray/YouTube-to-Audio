@@ -3,7 +3,14 @@ from typing import Any, Callable, cast
 
 import yt_dlp  # type: ignore[reportMissingTypeStubs]
 
-from app_utils import configure_ffmpeg_environment, expected_wav_path, normalize_youtube_url, ytdlp_nocheck_certificate
+from app_utils import (
+    configure_ffmpeg_environment,
+    expected_wav_path,
+    is_ytdlp_cookie_error,
+    normalize_youtube_url,
+    ytdlp_cookies_from_browser,
+    ytdlp_nocheck_certificate,
+)
 
 
 class Converter:
@@ -64,7 +71,7 @@ class Converter:
 
     def _build_ydl_options(self) -> dict[str, Any]:
         bundled_ffmpeg_dir = configure_ffmpeg_environment()
-        opts = {
+        opts = { # type: ignore
             "format": "bestaudio/best",
             "noplaylist": True,
             "outtmpl": str(self.out_dir / "%(title)s.%(ext)s"),
@@ -81,11 +88,14 @@ class Converter:
             "nocheckcertificate": ytdlp_nocheck_certificate(),
             "overwrites": False,
         }
+        cookies_from_browser = ytdlp_cookies_from_browser()
+        if cookies_from_browser:
+            opts["cookiesfrombrowser"] = cookies_from_browser
         if bundled_ffmpeg_dir:
             opts["ffmpeg_location"] = str(bundled_ffmpeg_dir)
         if self.codec in self.LOSSLESS_FORMATS:
-            opts.pop("audio_quality", None)
-        return opts
+            opts.pop("audio_quality", None) # type: ignore
+        return opts # type: ignore
 
     def _resolve_output_path(self, info: Any, ydl: Any) -> Path:
         output_audio = expected_wav_path(info, ydl).with_suffix(f".{self.codec}")
@@ -116,9 +126,18 @@ class Converter:
         self.url = normalize_youtube_url(self.url)
         opts = self._build_ydl_options()
         try:
-            with cast(Any, yt_dlp.YoutubeDL(opts)) as ydl:
-                info = cast(Any, ydl.extract_info(self.url, download=True))  # type: ignore[reportUnknownMemberType]
-                saved_path = self._resolve_output_path(info, ydl)
+            try:
+                with cast(Any, yt_dlp.YoutubeDL(opts)) as ydl:
+                    info = cast(Any, ydl.extract_info(self.url, download=True))  # type: ignore[reportUnknownMemberType]
+                    saved_path = self._resolve_output_path(info, ydl)
+            except yt_dlp.utils.DownloadError as cookie_exc:
+                if "cookiesfrombrowser" not in opts or not is_ytdlp_cookie_error(cookie_exc):
+                    raise
+                self.on_status("Browser cookies unavailable; retrying without cookies...")
+                opts.pop("cookiesfrombrowser", None)
+                with cast(Any, yt_dlp.YoutubeDL(opts)) as ydl:
+                    info = cast(Any, ydl.extract_info(self.url, download=True))  # type: ignore[reportUnknownMemberType]
+                    saved_path = self._resolve_output_path(info, ydl)
             self.on_progress(100)
             self.on_done(True, str(saved_path))
         except yt_dlp.utils.DownloadError as e:

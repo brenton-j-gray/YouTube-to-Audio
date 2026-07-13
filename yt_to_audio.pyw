@@ -8,13 +8,16 @@ CLI MODE  : python yt_to_audio.pyw <url> [output_directory]
 """
 
 import sys
-from tkinter import messagebox
 from pathlib import Path
 from typing import Any, cast
 
-from app_utils import ffmpeg_help_message, log_exception, missing_ffmpeg_binaries
+from app_utils import configure_tcl_tk_environment, ffmpeg_help_message, log_exception, missing_ffmpeg_binaries
 from cli_app import cli
 from gui_app import launch_gui
+
+configure_tcl_tk_environment()
+
+from tkinter import messagebox
 
 sys.excepthook = log_exception
 

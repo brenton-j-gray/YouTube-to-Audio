@@ -14,6 +14,7 @@ from typing import Any, TypedDict, cast
 import user_settings
 from app_utils import (
     append_error_log,
+    configure_tcl_tk_environment,
     ensure_taskbar_presence,
     is_supported_youtube_url,
     is_windows_dark_mode,
@@ -86,6 +87,8 @@ def _blend_hex(c1: str, c2: str, t: float) -> str:
 
 
 def launch_gui() -> None:
+    configure_tcl_tk_environment()
+
     import tkinter as tk
     from tkinter import font as tkfont
     from tkinter import filedialog, messagebox, ttk
@@ -160,15 +163,21 @@ def launch_gui() -> None:
         "menu_button_thickness": 0,
     }
     FONT_FAMILY = "Segoe UI"
-    TITLE_FONT = (FONT_FAMILY, 24, "bold")
+    title_font = (FONT_FAMILY, 24, "bold")
     SUBTITLE_FONT = (FONT_FAMILY, 12)
     SECTION_LABEL_FONT = (FONT_FAMILY, 10, "bold")
     BODY_LABEL_FONT = (FONT_FAMILY, 11)
     SMALL_LABEL_FONT = (FONT_FAMILY, 9)
+    RESIZE_GRIP_SIZE = 18
+    WINDOW_SIZE_PRESETS: tuple[tuple[str, int, int], ...] = (
+        ("Compact (720p)", 680, 620),
+        ("Standard (1080p)", 760, 700),
+        ("Large (1440p+)", 920, 820),
+    )
 
     root = tk.Tk()
     root.title("YouTube-2-Audio")
-    root.resizable(False, False)
+    root.resizable(True, True)
     root.configure(bg=BG)
     root.overrideredirect(True)
 
@@ -188,9 +197,9 @@ def launch_gui() -> None:
     register_preferred_title_font()
     families = {f.lower() for f in tkfont.families(root)}
     if "frijole" in families:
-        TITLE_FONT = ("Frijole", 30, "normal")
+        title_font = ("Frijole", 30, "normal")
     else:
-        TITLE_FONT = (FONT_FAMILY, 24, "bold")
+        title_font = (FONT_FAMILY, 24, "bold")
 
     saved = user_settings.load()
     force_topmost_var = tk.BooleanVar(master=root, value=bool(saved.get("force_remain_on_top", False)))
@@ -211,6 +220,17 @@ def launch_gui() -> None:
     _persist_job: list[str | None] = [None]
     _cv: list[Converter | None] = [None]
     _drag: DragState = {"x": 0, "y": 0, "active": False}
+    _resize: dict[str, int | bool] = {
+        "x": 0,
+        "y": 0,
+        "w": 0,
+        "h": 0,
+        "active": False,
+    }
+    min_window_size = [640, 560]
+    base_window_size = [0, 0]
+    ui_scale = [1.0]
+    scalable_widget_specs: list[dict[str, Any]] = []
 
     def can_drag_from(widget: Any) -> bool:
         return widget.winfo_class() in {"Tk", "Frame", "TFrame", "Label"}
@@ -232,6 +252,76 @@ def launch_gui() -> None:
 
     def end_drag(_event: Any) -> None:
         _drag["active"] = False
+
+    def _screen_limited_size(width: int, height: int) -> tuple[int, int]:
+        max_w = max(min_window_size[0], root.winfo_screenwidth() - 40)
+        max_h = max(min_window_size[1], root.winfo_screenheight() - 80)
+        return (
+            max(min_window_size[0], min(width, max_w)),
+            max(min_window_size[1], min(height, max_h)),
+        )
+
+    def _window_aspect_ratio() -> float:
+        if base_window_size[0] > 0 and base_window_size[1] > 0:
+            return base_window_size[0] / base_window_size[1]
+        current_h = max(1, root.winfo_height())
+        return max(0.1, root.winfo_width() / current_h)
+
+    def _aspect_limited_size(width: int, height: int) -> tuple[int, int]:
+        width, height = _screen_limited_size(width, height)
+        aspect = _window_aspect_ratio()
+        max_w = max(min_window_size[0], root.winfo_screenwidth() - 40)
+        max_h = max(min_window_size[1], root.winfo_screenheight() - 80)
+        width_driven = (width / max(1, height)) >= aspect
+
+        if width_driven:
+            height = max(1, round(width / aspect))
+            if height > max_h:
+                height = max_h
+                width = round(height * aspect)
+        else:
+            width = max(1, round(height * aspect))
+            if width > max_w:
+                width = max_w
+                height = round(width / aspect)
+
+        return _screen_limited_size(width, height)
+
+    def set_window_size(width: int, height: int, *, keep_position: bool = True) -> None:
+        width, height = _aspect_limited_size(width, height)
+        if keep_position:
+            root.geometry(f"{width}x{height}+{root.winfo_x()}+{root.winfo_y()}")
+        else:
+            sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+            root.geometry(f"{width}x{height}+{(sw - width) // 2}+{(sh - height) // 2}")
+        root.after_idle(lambda: do_persist(save_geo=True))
+
+    def begin_resize(event: Any) -> str:
+        _resize["active"] = True
+        _resize["x"] = event.x_root
+        _resize["y"] = event.y_root
+        _resize["w"] = root.winfo_width()
+        _resize["h"] = root.winfo_height()
+        return "break"
+
+    def do_resize(event: Any) -> str:
+        if not _resize["active"]:
+            return "break"
+        start_w = int(_resize["w"])
+        start_h = int(_resize["h"])
+        start_x = int(_resize["x"])
+        start_y = int(_resize["y"])
+        width, height = _aspect_limited_size(
+            start_w + event.x_root - start_x,
+            start_h + event.y_root - start_y,
+        )
+        root.geometry(f"{width}x{height}")
+        return "break"
+
+    def end_resize(_event: Any) -> str:
+        _resize["active"] = False
+        do_persist(save_geo=True)
+        return "break"
 
     def close_window() -> None:
         do_persist(save_geo=True)
@@ -370,9 +460,11 @@ def launch_gui() -> None:
     def render_thumbnail(thumb_bytes: bytes | None) -> Any:
         if not thumb_bytes:
             return None
+        thumb_w = max(96, int(round(160 * ui_scale[0])))
+        thumb_h = max(54, int(round(90 * ui_scale[0])))
         if pil_available:
             img = Image.open(BytesIO(thumb_bytes))
-            img.thumbnail((160, 90))
+            img.thumbnail((thumb_w, thumb_h))
             return ImageTk.PhotoImage(img)
         in_path, out_path = thumbnail_cache_paths(thumb_bytes)
         with open(in_path, "wb") as f:
@@ -714,13 +806,46 @@ def launch_gui() -> None:
     logo_row.pack(fill="x", padx=24, pady=(8, 2))
     youtube_logo_btn = tk.Canvas(logo_row, width=116, height=24, bg=BG, highlightthickness=0, bd=0, relief="flat", cursor="hand2")
     youtube_logo_btn.pack(side="left")
-    youtube_logo_btn.create_rectangle(2, 3, 36, 21, fill="#FF0033", outline="#FF0033")
-    youtube_logo_btn.create_polygon(16, 8, 16, 16, 25, 12, fill="#ffffff", outline="#ffffff")
-    yt_logo_text_id = youtube_logo_btn.create_text(44, 12, text="YouTube", fill=FG, font=("Segoe UI", 11, "bold"), anchor="w")
+    yt_logo_text_id_ref: list[int | None] = [None]
+
+    def draw_youtube_logo(fill: str = FG) -> None:
+        scale = ui_scale[0]
+        def sint(value: int, minimum: int = 0) -> int:
+            return max(minimum, int(round(value * scale)))
+
+        youtube_logo_btn.delete("all")
+        youtube_logo_btn.create_rectangle(
+            sint(2),
+            sint(3),
+            sint(36),
+            sint(21),
+            fill="#FF0033",
+            outline="#FF0033",
+        )
+        youtube_logo_btn.create_polygon(
+            sint(16),
+            sint(8),
+            sint(16),
+            sint(16),
+            sint(25),
+            sint(12),
+            fill="#ffffff",
+            outline="#ffffff",
+        )
+        yt_logo_text_id_ref[0] = youtube_logo_btn.create_text(
+            sint(44),
+            sint(12),
+            text="YouTube",
+            fill=fill,
+            font=("Segoe UI", sint(11, minimum=8), "bold"),
+            anchor="w",
+        )
+
+    draw_youtube_logo()
     youtube_logo_btn.bind("<Button-1>", lambda _e: open_youtube_home())
 
-    title_label = lbl(root, "YouTube 2 Audio", font=TITLE_FONT, fg=FG)
-    if TITLE_FONT[0] == "Frijole":
+    title_label = lbl(root, "YouTube 2 Audio", font=title_font, fg=FG)
+    if title_font[0] == "Frijole":
         try:
             frijole_font = tkfont.Font(root=root, family="Frijole", size=30, weight="normal")
             title_label.configure(font=frijole_font)
@@ -734,6 +859,7 @@ def launch_gui() -> None:
     preview_after_id: list[str | None] = [None]
     preview_pending_url: list[str | None] = [None]
     preview_request_id = [0]
+    preview_thumb_bytes_ref: list[bytes | None] = [None]
     preview_title_text = ["Unknown title"]
     preview_channel_text = ["Unknown channel"]
     is_downloading = [False]
@@ -989,7 +1115,7 @@ def launch_gui() -> None:
         thickness=PROGRESS_THICKNESS,
     )
     progress_host = tk.Frame(root, bg=BG, width=500, height=PROGRESS_THICKNESS + (PROGRESS_PAD_Y * 2))
-    progress_host.pack(padx=24, pady=(4, 16))
+    progress_host.pack(fill="x", padx=24, pady=(4, 16))
     progress_host.pack_propagate(False)
     bar = ttk.Progressbar(progress_host, style="Red.Horizontal.TProgressbar", orient="horizontal", mode="determinate")
     bar.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -1131,6 +1257,20 @@ def launch_gui() -> None:
 
     bottom_accent_border = tk.Frame(root, bg=ACCENT, height=BORDER_STYLE["accent_thickness"])
     bottom_accent_border.pack(fill="x", side="bottom")
+    resize_grip = tk.Label(
+        root,
+        text="◢",
+        bg=BG,
+        fg=MUTED,
+        cursor="size_nw_se",
+        font=(FONT_FAMILY, 10),
+        bd=0,
+        highlightthickness=0,
+    )
+    resize_grip.place(relx=1.0, rely=1.0, anchor="se", width=RESIZE_GRIP_SIZE, height=RESIZE_GRIP_SIZE)
+    resize_grip.bind("<ButtonPress-1>", begin_resize)
+    resize_grip.bind("<B1-Motion>", do_resize)
+    resize_grip.bind("<ButtonRelease-1>", end_resize)
 
     def set_busy(b: bool) -> None:
         is_downloading[0] = b
@@ -1170,6 +1310,7 @@ def launch_gui() -> None:
                 preview_var.set(text)
                 preview_title_text[0] = title or "Unknown title"
                 preview_channel_text[0] = channel or "Unknown channel"
+                preview_thumb_bytes_ref[0] = thumb_bytes if isinstance(thumb_bytes, bytes) else None
                 if thumb_bytes:
                     try:
                         photo = render_thumbnail(thumb_bytes)
@@ -1188,6 +1329,7 @@ def launch_gui() -> None:
                         preview_thumb_ref[0] = None
                         thumb_label.configure(image="", text="No preview")
                 elif not thumb_bytes:
+                    preview_thumb_bytes_ref[0] = None
                     preview_thumb_ref[0] = None
                     thumb_label.configure(image="", text="No preview")
 
@@ -1722,6 +1864,7 @@ def launch_gui() -> None:
         draw_busy_bar()
         preview_var.set("Preview: paste a YouTube URL below to auto-load video details.")
         preview_thumb_ref[0] = None
+        preview_thumb_bytes_ref[0] = None
         preview_pending_url[0] = None
         preview_title_text[0] = "Unknown title"
         preview_channel_text[0] = "Unknown channel"
@@ -1737,6 +1880,20 @@ def launch_gui() -> None:
         show_info("Default folder", "The current output folder is saved and will be restored next time.")
 
     def append_settings_extras() -> None:
+        size_menu = tk.Menu(settings_menu, **_menu_kws())
+        all_menu_popups.append(size_menu)
+        for label, width, height in WINDOW_SIZE_PRESETS:
+            size_menu.add_command(
+                label=f"{label} - {width}x{height}",
+                command=lambda w=width, h=height: set_window_size(w, h),
+            )
+        size_menu.add_separator()
+        size_menu.add_command(
+            label="Reset and center",
+            command=lambda: set_window_size(WINDOW_SIZE_PRESETS[1][1], WINDOW_SIZE_PRESETS[1][2], keep_position=False),
+        )
+        settings_menu.add_cascade(label="Window size", menu=size_menu)
+        settings_menu.add_separator()
         settings_menu.add_checkbutton(
             label="Open folder when download completes",
             variable=auto_open_var,
@@ -1778,6 +1935,185 @@ def launch_gui() -> None:
 
     append_settings_extras()
 
+    def _walk_widgets(widget: Any) -> list[Any]:
+        widgets = [widget]
+        for child in widget.winfo_children():
+            widgets.extend(_walk_widgets(child))
+        return widgets
+
+    def _as_int(value: Any) -> int | None:
+        try:
+            return int(round(float(str(value))))
+        except (TypeError, ValueError, tk.TclError):
+            return None
+
+    def _as_pad(value: Any) -> int | tuple[int, ...] | None:
+        if isinstance(value, (tuple, list)):
+            parsed_values: list[int] = []
+            for part in value:
+                one = _as_int(part)
+                if one is None:
+                    return None
+                parsed_values.append(one)
+            return parsed_values[0] if len(parsed_values) == 1 else tuple(parsed_values)
+        try:
+            parts = root.tk.splitlist(str(value))
+        except tk.TclError:
+            parts = ()
+        if not parts:
+            single = _as_int(value)
+            return single
+        parsed: list[int] = []
+        for part in parts:
+            one = _as_int(part)
+            if one is None:
+                return None
+            parsed.append(one)
+        return parsed[0] if len(parsed) == 1 else tuple(parsed)
+
+    def _scaled_int(value: int, scale: float, *, minimum: int = 0) -> int:
+        return max(minimum, int(round(value * scale)))
+
+    def _scaled_pad(value: int | tuple[int, ...], scale: float) -> int | tuple[int, ...]:
+        if isinstance(value, tuple):
+            return tuple(_scaled_int(v, scale) for v in value)
+        return _scaled_int(value, scale)
+
+    def _capture_scalable_widgets() -> None:
+        scalable_widget_specs.clear()
+        for widget in _walk_widgets(root):
+            if widget is root:
+                continue
+            spec: dict[str, Any] = {"widget": widget}
+            try:
+                font_value = widget.cget("font")
+                font_actual = tkfont.Font(root=root, font=font_value).actual()
+                spec["font"] = {
+                    "family": font_actual["family"],
+                    "size": abs(int(font_actual["size"])),
+                    "weight": font_actual["weight"],
+                    "slant": font_actual["slant"],
+                    "underline": bool(font_actual["underline"]),
+                    "overstrike": bool(font_actual["overstrike"]),
+                }
+            except (tk.TclError, KeyError, ValueError):
+                pass
+
+            options: dict[str, int | tuple[int, ...]] = {}
+            for opt in ("padx", "pady", "highlightthickness"):
+                try:
+                    parsed = _as_pad(widget.cget(opt))
+                except tk.TclError:
+                    parsed = None
+                if parsed is not None:
+                    options[opt] = parsed
+            if widget.winfo_class() in {"Frame", "Canvas"}:
+                for opt in ("width", "height"):
+                    try:
+                        parsed_int = _as_int(widget.cget(opt))
+                    except tk.TclError:
+                        parsed_int = None
+                    if parsed_int is not None and parsed_int > 1:
+                        options[opt] = parsed_int
+            if options:
+                spec["options"] = options
+
+            if widget.winfo_manager() == "pack":
+                pack_values: dict[str, int | tuple[int, ...]] = {}
+                try:
+                    pack_info = widget.pack_info()
+                except tk.TclError:
+                    pack_info = {}
+                for opt in ("padx", "pady", "ipadx", "ipady"):
+                    parsed = _as_pad(pack_info.get(opt, 0))
+                    if parsed is not None:
+                        pack_values[opt] = parsed
+                if pack_values:
+                    spec["pack"] = pack_values
+            elif widget.winfo_manager() == "place":
+                place_values: dict[str, int] = {}
+                try:
+                    place_info = widget.place_info()
+                except tk.TclError:
+                    place_info = {}
+                for opt in ("width", "height"):
+                    parsed_int = _as_int(place_info.get(opt, ""))
+                    if parsed_int is not None and parsed_int > 0:
+                        place_values[opt] = parsed_int
+                if place_values:
+                    spec["place"] = place_values
+
+            if len(spec) > 1:
+                scalable_widget_specs.append(spec)
+
+    def _font_from_spec(font_spec: dict[str, Any], scale: float) -> tuple[Any, ...]:
+        size = _scaled_int(int(font_spec["size"]), scale, minimum=7)
+        styles: list[str] = []
+        if font_spec.get("weight") and font_spec["weight"] != "normal":
+            styles.append(str(font_spec["weight"]))
+        if font_spec.get("slant") and font_spec["slant"] != "roman":
+            styles.append(str(font_spec["slant"]))
+        if font_spec.get("underline"):
+            styles.append("underline")
+        if font_spec.get("overstrike"):
+            styles.append("overstrike")
+        return (font_spec["family"], size, *styles)
+
+    def _refresh_scaled_thumbnail() -> None:
+        if not preview_thumb_bytes_ref[0]:
+            return
+        try:
+            photo = render_thumbnail(preview_thumb_bytes_ref[0])
+        except Exception as thumb_exc:
+            append_error_log("preview_thumbnail_resize", str(thumb_exc))
+            return
+        preview_thumb_ref[0] = photo
+        if photo:
+            thumb_label.configure(image=photo, text="")
+
+    def apply_ui_scale(scale: float, *, force: bool = False) -> None:
+        scale = max(0.78, min(1.35, round(scale, 2)))
+        if not force and abs(scale - ui_scale[0]) < 0.01:
+            return
+        ui_scale[0] = scale
+        for spec in scalable_widget_specs:
+            widget = spec["widget"]
+            try:
+                if "font" in spec:
+                    widget.configure(font=_font_from_spec(spec["font"], scale))
+                if "options" in spec:
+                    widget.configure(
+                        **{opt: _scaled_pad(value, scale) for opt, value in spec["options"].items()}
+                    )
+                if "pack" in spec and widget.winfo_manager() == "pack":
+                    widget.pack_configure(
+                        **{opt: _scaled_pad(value, scale) for opt, value in spec["pack"].items()}
+                    )
+                if "place" in spec and widget.winfo_manager() == "place":
+                    widget.place_configure(
+                        **{opt: _scaled_int(value, scale, minimum=1) for opt, value in spec["place"].items()}
+                    )
+            except tk.TclError:
+                continue
+        st_any.configure(
+            "ThemeAware.TCombobox",
+            padding=(
+                _scaled_int(FIELD_PAD_X, scale),
+                _scaled_int(COMBO_PAD_Y, scale),
+                _scaled_int(FIELD_PAD_X, scale),
+                _scaled_int(COMBO_PAD_Y, scale),
+            ),
+        )
+        st_any.configure("Red.Horizontal.TProgressbar", thickness=_scaled_int(PROGRESS_THICKNESS, scale, minimum=8))
+        _refresh_scaled_thumbnail()
+        draw_youtube_logo(str(title_label.cget("fg")))
+        draw_busy_bar()
+
+    def _scale_for_window(width: int, height: int) -> float:
+        if base_window_size[0] <= 0 or base_window_size[1] <= 0:
+            return ui_scale[0]
+        return min(width / base_window_size[0], height / base_window_size[1])
+
     def apply_theme() -> None:
         mode = theme_mode_var.get()
         dark = is_windows_dark_mode() if mode == "system" else (mode == "dark")
@@ -1790,7 +2126,7 @@ def launch_gui() -> None:
             current_fg = str(w.cget("fg"))
             target_fg = p["MUTED"] if current_fg in {MUTED, p["MUTED"]} else p["FG"]
             w.configure(bg=p["BG"], fg=target_fg)
-        title_label.configure(font=TITLE_FONT, fg=p["FG"])
+        title_label.configure(font=title_font, fg=p["FG"])
 
         for frame in (
             top_controls,
@@ -1806,6 +2142,7 @@ def launch_gui() -> None:
             donate_box,
         ):
             frame.configure(bg=p["BG"])
+        resize_grip.configure(bg=p["BG"], fg=p["MUTED"])
         progress_host.configure(bg=p["BG"])
         for frame in (uf, url_row, dir_input_wrap, preview_row, thumb_frame, preview_text_frame):
             frame.configure(bg=p["SURF"], highlightbackground=p["BORDER"])
@@ -1840,9 +2177,9 @@ def launch_gui() -> None:
                 activeforeground=p["NEUTRAL_BTN_FG"],
                 highlightbackground=p["BORDER"],
                 highlightcolor=p["BORDER"],
-            )
+        )
         youtube_logo_btn.configure(bg=p["BG"])
-        youtube_logo_btn.itemconfigure(yt_logo_text_id, fill=p["FG"])
+        draw_youtube_logo(p["FG"])
         go_btn.configure(
             bg=p["ACCENT"],
             fg=p["ON_ACCENT"],
@@ -1927,6 +2264,7 @@ def launch_gui() -> None:
         busy_palette["trough"] = p["BORDER"] if not p["APP_IS_DARK"] else p["SURF"]
         busy_palette["stripe_a"] = p["ACCENT"]
         busy_palette["stripe_b"] = _blend_hex(p["ACCENT"], "#ffffff", 0.22)
+        apply_ui_scale(ui_scale[0], force=True)
         draw_busy_bar()
 
     last_system_dark = [is_windows_dark_mode()]
@@ -1945,6 +2283,21 @@ def launch_gui() -> None:
 
     def _persist_trace(*_: Any) -> None:
         do_persist()
+
+    def on_root_configure(event: Any) -> None:
+        if event.widget is not root:
+            return
+        width = max(min_window_size[0], int(event.width))
+        height = max(min_window_size[1], int(event.height))
+        scale = _scale_for_window(width, height)
+        apply_ui_scale(scale)
+        margin = _scaled_int(24, ui_scale[0])
+        preview_offset = _scaled_int(250, ui_scale[0])
+        preview_min = _scaled_int(300, ui_scale[0], minimum=220)
+        preview_text_frame.configure(width=max(preview_min, width - preview_offset))
+        preview_label.configure(wraplength=max(preview_min, width - preview_offset - margin))
+        progress_host.configure(width=max(preview_min, width - _scaled_int(48, ui_scale[0])))
+        draw_busy_bar()
 
     cast(Any, theme_mode_var).trace_add("write", _theme_trace)
     cast(Any, fmt_var).trace_add("write", _persist_trace)
@@ -1979,6 +2332,7 @@ def launch_gui() -> None:
     root.bind_all("<Control-o>", _k_o)
     root.bind_all("<Control-Shift-O>", _k_err)
     root.bind_all("<Control-Shift-F>", _k_reveal)
+    root.bind("<Configure>", on_root_configure, add="+")
     go_btn.config(command=start)
     stop_btn.config(command=cancel)
     open_btn.config(command=open_output_folder)
@@ -1986,21 +2340,27 @@ def launch_gui() -> None:
     watch_system_theme()
 
     root.update_idletasks()
-    fixed_w = root.winfo_width()
-    fixed_h = root.winfo_height()
-    root.minsize(fixed_w, fixed_h)
-    root.maxsize(fixed_w, fixed_h)
+    content_w = root.winfo_width()
+    content_h = root.winfo_height()
+    base_window_size[0] = content_w
+    base_window_size[1] = content_h
+    _capture_scalable_widgets()
+    root.minsize(min_window_size[0], min_window_size[1])
     gsave = saved.get("window_geometry")
     placed = False
     if gsave and isinstance(gsave, str) and re.fullmatch(r"\d+x\d+[-+]\d+[-+]\d+", gsave):
         try:
-            root.geometry(gsave)
+            m = re.fullmatch(r"(\d+)x(\d+)([-+]\d+)([-+]\d+)", gsave)
+            if m:
+                width, height = _aspect_limited_size(int(m.group(1)), int(m.group(2)))
+                root.geometry(f"{width}x{height}{m.group(3)}{m.group(4)}")
             placed = True
         except tk.TclError:
             placed = False
     if not placed:
+        default_w, default_h = _aspect_limited_size(content_w, content_h)
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         root.geometry(
-            f"{fixed_w}x{fixed_h}+{(sw - fixed_w) // 2}+{(sh - fixed_h) // 2}"
+            f"{default_w}x{default_h}+{(sw - default_w) // 2}+{(sh - default_h) // 2}"
         )
     root.mainloop()
